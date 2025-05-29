@@ -8,8 +8,6 @@ Deploy the Terraform MCP Server to Azure Container Apps with secure Key Vault in
 - `mcp-sse-server.py` - Python SSE wrapper for the MCP server  
 - `Dockerfile` - Container build configuration
 - `deploy.ps1` - PowerShell deployment script
-- `deploy.bat` - Windows batch file launcher
-- `.vscode/mcp.json` - VS Code configuration (created after deployment)
 
 ## Prerequisites
 
@@ -17,48 +15,50 @@ Deploy the Terraform MCP Server to Azure Container Apps with secure Key Vault in
 2. **Azure CLI** - [Download](https://aka.ms/installazurecliwindows)
 3. **VS Code** with GitHub Copilot
 
-Note: Docker is NOT required on your local machine!
-
 ## Deployment
 
-1. Open Command Prompt or PowerShell
-2. Navigate to this directory
-3. Run: `deploy.bat`
+1. Start PowerShell or Command Prompt
+2. Run:
+```powershell
+./deploy.ps1
+```
 
-## What Gets Deployed
+The script will:
+1. Check prerequisites
+2. Clean up any soft-deleted Key Vaults
+3. Deploy Azure infrastructure using Terraform
+4. Build and push Docker image using Azure Container Registry
+5. Create VS Code configuration
 
-- Azure Resource Group
-- Azure Key Vault (stores API key securely)
-- Azure Container Registry
-- Azure Container Apps Environment
-- Container App running the MCP server
-- Log Analytics Workspace
+## Infrastructure Components
 
-## After Deployment
+- **Azure Resource Group** - Contains all resources
+- **Azure Key Vault** - Securely stores API key
+- **Azure Container Registry** - Stores Docker images
+- **Azure Container Apps Environment** - Hosting platform
+- **Container App** - Runs the MCP server
+- **Log Analytics Workspace** - Collects logs and metrics
+- **Managed Identity** - For secure access to Key Vault
 
-Your API key will be:
-- Generated automatically
-- Stored securely in Azure Key Vault
-- Displayed in the deployment output
-- Configured in `.vscode/mcp.json`
+## Security Features
 
-## Using in VS Code
+- API key stored in Azure Key Vault
+- HTTPS enabled by default
+- Key Vault RBAC authorization
+- Managed Identity for secure access
+- Bearer token authentication
+
+## Using with VS Code
 
 1. Open VS Code in this directory
-2. Press `Ctrl+Alt+I` to open GitHub Copilot Chat
-3. Select "Agent" mode from the dropdown
-4. The Terraform MCP tools are now available!
-
-## Costs
-
-- Container Apps: ~$0.40/day when idle
-- Key Vault: ~$0.03/month
-- Container Registry: ~$5/month
-- Log Analytics: ~$2.50/GB ingested
+2. The deployment creates `.vscode/mcp.json` with your configuration
+3. Press `Ctrl+Alt+I` to open GitHub Copilot Chat
+4. Select "Agent" mode
+5. Start using Terraform tools!
 
 ## Cleanup
 
-To remove all resources:
+Remove all Azure resources:
 ```powershell
 terraform destroy -auto-approve
 ```
