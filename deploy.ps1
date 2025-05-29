@@ -20,13 +20,6 @@ try {
     exit 1
 }
 
-# Check for required files
-if (-not (Test-Path "mcp-sse-server.py")) {
-    Write-Host "❌ Error: mcp-sse-server.py not found!" -ForegroundColor Red
-    Write-Host "   Please ensure you have renamed mcp-http-wrapper.py to mcp-sse-server.py" -ForegroundColor Yellow
-    exit 1
-}
-
 # Step 1: Clean up any soft-deleted Key Vaults
 Write-Host "`n🔐 Checking for soft-deleted Key Vaults..." -ForegroundColor Yellow
 $deletedVaults = az keyvault list-deleted --query "[?contains(name, 'mcp-kv')].[name]" -o tsv 2>$null
