@@ -13,6 +13,8 @@ from aiohttp import web
 from aiohttp_sse import sse_response
 import uuid
 from datetime import datetime
+from collections import defaultdict
+from time import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +29,10 @@ class MCPSSEServer:
         self.app = web.Application()
         self.setup_routes()
         self.active_processes = {}
+        # Rate limiting: Track requests per IP address
+        self.rate_limit_requests = defaultdict(list)
+        self.rate_limit_window = 60  # seconds
+        self.rate_limit_max = 10  # max requests per window
         
     def setup_routes(self):
         self.app.router.add_get('/health', self.health_check)
@@ -49,19 +55,46 @@ class MCPSSEServer:
         """Verify API key authentication if configured"""
         if not API_KEY:
             return True  # No auth required if API_KEY not set
-            
+
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
             return token == API_KEY
-        
+
         # Also check for API key in headers
         return request.headers.get('X-API-Key', '') == API_KEY
-    
+
+    def check_rate_limit(self, request):
+        """Check if request should be rate limited"""
+        # Get client IP (consider X-Forwarded-For for proxies)
+        client_ip = request.headers.get('X-Forwarded-For', request.remote)
+        if ',' in client_ip:
+            client_ip = client_ip.split(',')[0].strip()
+
+        current_time = time()
+
+        # Clean up old requests outside the window
+        self.rate_limit_requests[client_ip] = [
+            req_time for req_time in self.rate_limit_requests[client_ip]
+            if current_time - req_time < self.rate_limit_window
+        ]
+
+        # Check if rate limit exceeded
+        if len(self.rate_limit_requests[client_ip]) >= self.rate_limit_max:
+            return False
+
+        # Add current request
+        self.rate_limit_requests[client_ip].append(current_time)
+        return True
+
     async def handle_sse(self, request):
         """Handle SSE requests for MCP communication"""
         if not self.check_auth(request):
             return web.Response(status=401, text='Unauthorized')
+
+        if not self.check_rate_limit(request):
+            logger.warning(f"Rate limit exceeded for {request.remote}")
+            return web.Response(status=429, text='Too Many Requests')
         
         logger.info("New SSE connection established")
         
@@ -111,10 +144,19 @@ class MCPSSEServer:
             finally:
                 # Clean up
                 if process_id in self.active_processes:
-                    process.terminate()
-                    await process.wait()
-                    del self.active_processes[process_id]
-                    logger.info(f"Cleaned up process {process_id}")
+                    try:
+                        process.terminate()
+                        await asyncio.wait_for(process.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Process {process_id} did not terminate, forcing kill")
+                        process.kill()
+                        await process.wait()
+                    except Exception as e:
+                        logger.error(f"Error terminating process {process_id}: {e}")
+                        process.kill()
+                    finally:
+                        del self.active_processes[process_id]
+                        logger.info(f"Cleaned up process {process_id}")
                 
         return resp
     

@@ -1,0 +1,83 @@
+name: Build and Deploy MCP Server
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mcp-sse-server.py'
+      - 'Dockerfile'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get Terraform outputs
+        id: terraform
+        run: |
+          echo "Getting deployment information from Azure..."
+
+          # Find resource group with terraform-mcp tag
+          RESOURCE_GROUP=$(az group list \
+            --query "[?tags.application=='terraform-mcp-server'].name" \
+            -o tsv | head -n 1)
+
+          if [ -z "$RESOURCE_GROUP" ]; then
+            echo "Error: Could not find resource group with application tag 'terraform-mcp-server'"
+            exit 1
+          fi
+
+          echo "Found resource group: $RESOURCE_GROUP"
+
+          # Get Container App name
+          CONTAINER_APP_NAME=$(az containerapp list \
+            --resource-group $RESOURCE_GROUP \
+            --query "[?tags.application=='terraform-mcp-server'].name" \
+            -o tsv | head -n 1)
+
+          # Get ACR name
+          ACR_NAME=$(az acr list \
+            --resource-group $RESOURCE_GROUP \
+            --query "[?tags.application=='terraform-mcp-server'].name" \
+            -o tsv | head -n 1)
+
+          echo "container_app_name=$CONTAINER_APP_NAME" >> $GITHUB_OUTPUT
+          echo "acr_name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "resource_group=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image to ACR
+        run: |
+          echo "Building and pushing Docker image to ACR..."
+          az acr build \
+            --registry ${{ steps.terraform.outputs.acr_name }} \
+            --image terraform-mcp-server:latest \
+            --image terraform-mcp-server:${{ github.sha }} \
+            --file Dockerfile \
+            .
+
+      - name: Update Container App
+        run: |
+          echo "Updating Container App with new image..."
+          ACR_LOGIN_SERVER="${{ steps.terraform.outputs.acr_name }}.azurecr.io"
+
+          az containerapp update \
+            --name ${{ steps.terraform.outputs.container_app_name }} \
+            --resource-group ${{ steps.terraform.outputs.resource_group }} \
+            --image "${ACR_LOGIN_SERVER}/terraform-mcp-server:latest"
+
+      - name: Deployment summary
+        run: |
+          echo "✅ Deployment completed successfully!"
+          echo "🐳 Image: ${{ steps.terraform.outputs.acr_name }}.azurecr.io/terraform-mcp-server:latest"
+          echo "📦 Container App: ${{ steps.terraform.outputs.container_app_name }}"
+          echo "📍 Resource Group: ${{ steps.terraform.outputs.resource_group }}"
