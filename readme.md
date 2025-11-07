@@ -42,6 +42,7 @@ The key features of this project are:
 - `mcp-sse-server.py` - Python SSE wrapper for the MCP server
 - `Dockerfile` - Container build configuration
 - `deploy.ps1` - PowerShell deployment script
+- `regenerate-token.ps1` - Script to regenerate API token for existing deployment
 
 ## Prerequisites
 
@@ -101,6 +102,38 @@ This solution is designed with security in mind, incorporating several best prac
 3. Press `Ctrl+Alt+I` to open GitHub Copilot Chat
 4. Select "Agent" mode
 5. Start using Terraform tools!
+
+## Regenerating API Tokens
+
+You can generate a new API token for your existing deployment without redeploying the entire infrastructure. This is useful for:
+
+- **Token Rotation:** Regularly rotate tokens for enhanced security
+- **Access Management:** Grant access to new users without sharing existing tokens
+- **Security Response:** Revoke compromised tokens immediately
+
+### How to Regenerate
+
+Run the regeneration script from the project directory:
+
+```powershell
+./regenerate-token.ps1
+```
+
+The script will:
+1. Generate a new random API key
+2. Update the Azure Key Vault secret
+3. Update the Container App secret
+4. Restart the Container App to apply changes
+5. Update your local `.vscode/mcp.json` configuration
+
+**Important:** All existing tokens will be invalidated. Make sure to distribute the new token to all users who need access.
+
+### Requirements
+
+- Azure CLI installed and authenticated
+- Appropriate permissions on the Azure resources:
+  - "Key Vault Secrets Officer" or "Key Vault Administrator" role for the Key Vault
+  - Contributor access to the Container App
 
 ## Troubleshooting
 

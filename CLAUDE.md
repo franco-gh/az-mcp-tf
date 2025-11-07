@@ -40,6 +40,24 @@ This is a Terraform MCP (Model Context Protocol) Server deployment for Azure Con
 ```
 This is the primary deployment command. It handles all steps automatically.
 
+### Regenerate API Token
+```powershell
+./regenerate-token.ps1
+```
+Generates a new API token for an existing deployment without redeploying infrastructure. This is useful for:
+- Rotating tokens for security purposes
+- Granting access to new users without sharing existing tokens
+- Revoking compromised tokens
+
+The script will:
+1. Generate a new random API key
+2. Update the Key Vault secret
+3. Update the Container App secret
+4. Restart the Container App
+5. Update the local `.vscode/mcp.json` configuration
+
+**Note**: All existing tokens will be invalidated after regeneration.
+
 ### Terraform Operations
 ```bash
 # Initialize Terraform
