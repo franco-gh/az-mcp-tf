@@ -32,3 +32,14 @@ variable "owner" {
   type        = string
   default     = "platform-team"
 }
+
+variable "api_key_users" {
+  description = "List of users who need API keys for MCP server access"
+  type        = list(string)
+  default     = ["default"]
+
+  validation {
+    condition     = length(var.api_key_users) > 0
+    error_message = "At least one API key user must be specified"
+  }
+}

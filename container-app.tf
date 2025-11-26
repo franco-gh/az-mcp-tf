@@ -44,8 +44,14 @@ resource "azurerm_container_app" "mcp_app" {
       }
 
       env {
+        name        = "API_KEYS"
+        secret_name = "api-keys-json"
+      }
+
+      # Legacy single key for backward compatibility
+      env {
         name        = "API_KEY"
-        secret_name = "api-key"
+        secret_name = "api-key-default"
       }
 
       env {
@@ -63,14 +69,23 @@ resource "azurerm_container_app" "mcp_app" {
     max_replicas = 3
   }
 
+  # JSON-encoded API keys for multi-user authentication
   secret {
-    name  = "api-key"
-    value = random_password.api_key.result
+    name = "api-keys-json"
+    value = jsonencode({
+      for user in var.api_key_users : user => random_password.api_key[user].result
+    })
+  }
+
+  # Legacy single key for backward compatibility (uses first user's key)
+  secret {
+    name  = "api-key-default"
+    value = random_password.api_key[var.api_key_users[0]].result
   }
 
   secret {
     name  = "tfe-token"
-    value = var.tfe_token
+    value = var.tfe_token != "" ? var.tfe_token : "not-configured"
   }
 
   registry {

@@ -17,8 +17,9 @@ resource "azurerm_resource_group" "mcp_rg" {
   tags     = local.common_tags
 }
 
-# Generate API Key
+# Generate API Key per user
 resource "random_password" "api_key" {
+  for_each         = toset(var.api_key_users)
   length           = 32
   special          = true
   override_special = "-_"

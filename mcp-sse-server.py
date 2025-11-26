@@ -22,7 +22,29 @@ logger = logging.getLogger(__name__)
 
 # Get configuration from environment
 PORT = int(os.environ.get('PORT', 3000))
-API_KEY = os.environ.get('API_KEY', '')
+
+# Multi-user API keys support
+# API_KEYS is a JSON object: {"user1": "key1", "user2": "key2"}
+# API_KEY is the legacy single-key format for backward compatibility
+LEGACY_API_KEY = os.environ.get('API_KEY', '')
+API_KEYS_JSON = os.environ.get('API_KEYS', '{}')
+
+# Parse API keys
+try:
+    API_KEYS = json.loads(API_KEYS_JSON)
+except json.JSONDecodeError:
+    API_KEYS = {}
+    logger.warning("Failed to parse API_KEYS JSON, falling back to legacy mode")
+
+# Backward compatibility: use legacy single key if API_KEYS is empty
+if LEGACY_API_KEY and not API_KEYS:
+    API_KEYS = {"default": LEGACY_API_KEY}
+    logger.info("Using legacy single API key mode")
+elif API_KEYS:
+    logger.info(f"Multi-user mode enabled with {len(API_KEYS)} users")
+
+# Reverse lookup: key -> username
+API_KEY_TO_USER = {v: k for k, v in API_KEYS.items()}
 
 class MCPSSEServer:
     def __init__(self):
@@ -52,17 +74,27 @@ class MCPSSEServer:
         return web.json_response({'status': 'healthy'})
     
     def check_auth(self, request):
-        """Verify API key authentication if configured"""
-        if not API_KEY:
-            return True  # No auth required if API_KEY not set
+        """
+        Verify API key authentication and return user identity.
 
+        Returns:
+            tuple: (is_authenticated: bool, username: str | None)
+        """
+        if not API_KEYS:
+            return True, None  # No auth required if no API keys configured
+
+        # Extract token from Authorization header or X-API-Key
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
-            return token == API_KEY
+        else:
+            token = request.headers.get('X-API-Key', '')
 
-        # Also check for API key in headers
-        return request.headers.get('X-API-Key', '') == API_KEY
+        # Check if token is valid and get associated username
+        if token in API_KEY_TO_USER:
+            return True, API_KEY_TO_USER[token]
+
+        return False, None
 
     def check_rate_limit(self, request):
         """Check if request should be rate limited"""
@@ -89,14 +121,17 @@ class MCPSSEServer:
 
     async def handle_sse(self, request):
         """Handle SSE requests for MCP communication"""
-        if not self.check_auth(request):
+        is_authenticated, username = self.check_auth(request)
+
+        if not is_authenticated:
+            logger.warning(f"Unauthorized request from {request.remote}")
             return web.Response(status=401, text='Unauthorized')
 
         if not self.check_rate_limit(request):
             logger.warning(f"Rate limit exceeded for {request.remote}")
             return web.Response(status=429, text='Too Many Requests')
-        
-        logger.info("New SSE connection established")
+
+        logger.info(f"New SSE connection from user: {username or 'unknown'} ({request.remote})")
         
         async with sse_response(request) as resp:
             process_id = str(uuid.uuid4())
@@ -181,11 +216,11 @@ class MCPSSEServer:
     
     def run(self):
         logger.info(f"Starting MCP SSE server on port {PORT}")
-        if API_KEY:
-            logger.info("API key authentication enabled")
+        if API_KEYS:
+            logger.info(f"API key authentication enabled ({len(API_KEYS)} users)")
         else:
             logger.info("Warning: Running without API key authentication")
-            
+
         web.run_app(self.app, host='0.0.0.0', port=PORT)
 
 if __name__ == '__main__':
