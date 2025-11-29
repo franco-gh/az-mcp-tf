@@ -19,7 +19,7 @@ resource "azurerm_container_app_environment" "mcp_env" {
   tags                       = local.common_tags
 }
 
-# Container App - Initial deployment with public image
+# Container App with Nginx + terraform-mcp-server (native Streamable HTTP)
 resource "azurerm_container_app" "mcp_app" {
   name                         = "terraform-mcp-server"
   container_app_environment_id = azurerm_container_app_environment.mcp_env.id
@@ -38,22 +38,13 @@ resource "azurerm_container_app" "mcp_app" {
       cpu    = 1.0
       memory = "2Gi"
 
-      env {
-        name  = "PORT"
-        value = "3000"
-      }
-
-      env {
-        name        = "API_KEYS"
-        secret_name = "api-keys-json"
-      }
-
-      # Legacy single key for backward compatibility
+      # API key for nginx authentication (injected at startup)
       env {
         name        = "API_KEY"
-        secret_name = "api-key-default"
+        secret_name = "api-key"
       }
 
+      # HCP Terraform / TFE configuration for private registries
       env {
         name  = "TFE_ADDRESS"
         value = var.tfe_address
@@ -69,23 +60,15 @@ resource "azurerm_container_app" "mcp_app" {
     max_replicas = 3
   }
 
-  # JSON-encoded API keys for multi-user authentication
-  secret {
-    name = "api-keys-json"
-    value = jsonencode({
-      for user in var.api_key_users : user => random_password.api_key[user].result
-    })
-  }
-
-  # Legacy single key for backward compatibility (uses first user's key)
-  secret {
-    name  = "api-key-default"
-    value = random_password.api_key[var.api_key_users[0]].result
-  }
-
   secret {
     name  = "tfe-token"
     value = var.tfe_token != "" ? var.tfe_token : "not-configured"
+  }
+
+  secret {
+    name                = "api-key"
+    key_vault_secret_id = azurerm_key_vault_secret.api_key.id
+    identity            = azurerm_user_assigned_identity.mcp_identity.id
   }
 
   registry {
@@ -101,7 +84,7 @@ resource "azurerm_container_app" "mcp_app" {
 
   ingress {
     external_enabled = true
-    target_port      = 3000
+    target_port      = 8080
     transport        = "http"
 
     traffic_weight {
@@ -110,12 +93,10 @@ resource "azurerm_container_app" "mcp_app" {
     }
   }
 
-  tags = {
-    environment = "production"
-    application = "terraform-mcp-server"
-  }
+  tags = local.common_tags
 
   depends_on = [
-    azurerm_role_assignment.identity_kv_reader
+    azurerm_role_assignment.identity_kv_reader,
+    azurerm_key_vault_secret.api_key
   ]
 }

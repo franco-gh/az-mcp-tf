@@ -4,43 +4,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Terraform MCP (Model Context Protocol) Server deployment for Azure Container Apps. Deploys HashiCorp's terraform-mcp-server wrapped in an SSE (Server-Sent Events) interface for VS Code GitHub Copilot integration.
+Terraform MCP (Model Context Protocol) Server deployment for Azure Container Apps. Deploys HashiCorp's terraform-mcp-server with native Streamable HTTP transport and API key authentication via Nginx sidecar.
 
 ## Architecture
 
 ```
-VS Code/Copilot → Azure Container App (Python SSE Wrapper) → terraform-mcp-server (subprocess)
-                         ↓
-                 Managed Identity → Key Vault (API Key)
+Claude Code → Nginx (API key validation) → terraform-mcp-server (native HTTP)
+                      ↓
+              Key Vault (API key storage)
 ```
 
 ### Core Components
 
-1. **MCP SSE Server** (`mcp-sse-server.py`)
-   - Python aiohttp server wrapping terraform-mcp-server stdio interface
-   - Implements SSE protocol with Bearer/X-API-Key authentication
-   - Rate limiting: 10 requests per IP per 60-second window
-   - Spawns and manages terraform-mcp-server subprocess per connection
-   - Endpoints: `/health`, `/mcp/v1/sse` (POST), `/` (info)
+1. **Nginx + terraform-mcp-server** (single container with supervisord)
+   - Nginx on port 8080 (external) validates API key
+   - terraform-mcp-server on port 9000 (internal) with Streamable HTTP
+   - Stateless mode for high availability (`MCP_SESSION_MODE=stateless`)
+   - supervisord manages both processes
 
-2. **Terraform Infrastructure** (split across multiple files):
+2. **API Key Authentication** (`nginx.conf`)
+   - Validates `Authorization: Bearer <key>` or `X-API-Key` header
+   - Health endpoint bypasses authentication
+   - API key stored in Azure Key Vault
+
+3. **Terraform Infrastructure** (split across multiple files):
    - `main.tf` - Resource Group, API key generation, random suffix, Managed Identity
-   - `keyvault.tf` - Key Vault with RBAC authorization, secret storage
+   - `keyvault.tf` - Key Vault with RBAC authorization, API key secret
    - `container-registry.tf` - ACR with identity-based pull
-   - `container-app.tf` - Container App, Log Analytics, environment config
-   - `providers.tf` - Provider versions and Azure config
+   - `container-app.tf` - Container App configuration
+   - `providers.tf` - Provider versions (azurerm, random)
    - `variables.tf` - Input variables (tfe_token, tfe_address, environment, owner)
-   - `outputs.tf` - URLs, credentials, MCP config JSON for Claude Code
+   - `outputs.tf` - URLs, API key, MCP config
 
-3. **Container** (`Dockerfile`)
+4. **Container** (`Dockerfile`)
    - Based on `hashicorp/terraform-mcp-server:latest`
-   - Adds Python 3, aiohttp, aiohttp-sse
-   - Runs as non-root user (mcp:1000)
-   - Built-in health check on port 3000
+   - Adds nginx, supervisord, gettext (envsubst)
+   - API_KEY environment variable injected at startup
 
-4. **CI/CD** (`.github/workflows/deploy.yml`)
-   - Triggers on push to main for mcp-sse-server.py, Dockerfile, or workflow changes
-   - Discovers resources by application tag, builds image via ACR, updates Container App
+5. **CI/CD** (`.github/workflows/deploy.yml`)
+   - Terraform Cloud integration
+   - Triggers on push to main for Terraform, Dockerfile, or nginx.conf changes
+   - Builds image via ACR, updates Container App
 
 ## Common Commands
 
@@ -71,7 +75,8 @@ terraform destroy -auto-approve
 # View outputs
 terraform output
 terraform output -raw api_key
-terraform output -json mcp_config_claude_code_hosted  # For VS Code config
+terraform output -raw mcp_endpoint
+terraform output mcp_config_claude_code
 ```
 
 ### Manual Azure Operations
@@ -90,49 +95,59 @@ az keyvault list-deleted
 az keyvault purge --name mcp-kv-<suffix>
 ```
 
-### Local Development
-```bash
-PORT=3000 API_KEY=test python3 mcp-sse-server.py
-# Requires terraform-mcp-server binary in PATH
-```
-
 ### Testing
 ```bash
-# Health check
+# Health check (no auth required)
 curl https://<container-app-url>/health
 
-# SSE endpoint
-curl -X POST -H "Authorization: Bearer <api-key>" https://<container-app-url>/mcp/v1/sse
+# MCP endpoint (with API key)
+API_KEY=$(terraform output -raw api_key)
+curl -H "Authorization: Bearer $API_KEY" https://<container-app-url>/mcp
 ```
 
 ## Key Design Decisions
 
+- **Native Streamable HTTP**: Uses HashiCorp's built-in transport (no custom Python wrapper)
+- **Stateless Mode**: Enables horizontal scaling and high availability
+- **API Key Auth via Nginx**: Simple, no token expiration, easy to manage
 - **Key Vault RBAC**: Uses RBAC authorization instead of access policies
 - **Managed Identity**: User-assigned identity for Key Vault and ACR access
 - **Soft Delete**: Disabled for non-production, enabled for production via `environment` variable
 - **Scaling**: 1-3 replicas, 1.0 CPU / 2Gi memory per container
-- **Image lifecycle**: Terraform ignores image changes after initial deployment (managed by CI/CD)
 
 ## Environment Variables
 
-- `PORT`: HTTP server port (default: 3000)
-- `API_KEY`: Required for authentication (from Key Vault)
+Container App environment variables:
+- `API_KEY`: API key for nginx authentication (from Key Vault)
 - `TFE_ADDRESS`: Terraform Enterprise address (default: https://app.terraform.io)
 - `TFE_TOKEN`: Terraform Enterprise API token (for private registries)
 
-## VS Code Configuration
+Internal (set by supervisord):
+- `TRANSPORT_MODE`: `streamable-http`
+- `TRANSPORT_HOST`: `127.0.0.1`
+- `TRANSPORT_PORT`: `9000`
+- `MCP_SESSION_MODE`: `stateless`
 
-Generated config in `.vscode/mcp.json`:
+## Claude Code Configuration
+
+Add to your `.vscode/mcp.json` or Claude Code settings:
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "terraform": {
-      "url": "https://<container-app-fqdn>/mcp/v1/sse",
-      "headers": { "Authorization": "Bearer <api-key>" },
-      "type": "sse"
+      "type": "sse",
+      "url": "https://<container-app-fqdn>/mcp",
+      "headers": {
+        "Authorization": "Bearer <API_KEY>"
+      }
     }
   }
 }
+```
+
+Get your API key:
+```bash
+terraform output -raw api_key
 ```
 
 ## Troubleshooting
@@ -140,3 +155,5 @@ Generated config in `.vscode/mcp.json`:
 - **Key Vault naming conflicts**: Manually purge soft-deleted vaults with `az keyvault purge --name <vault-name>`
 - **Container App failures**: Check logs with `az containerapp logs show --follow`
 - **Permission errors**: Requires subscription Contributor access and ability to create RBAC role assignments
+- **401 Unauthorized**: Check API key is correct and included in Authorization header
+- **Health check fails**: Verify nginx and terraform-mcp-server processes are running

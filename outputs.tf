@@ -1,24 +1,13 @@
 # Terraform outputs for deployment information
 
 output "mcp_server_url" {
-  value       = "https://${azurerm_container_app.mcp_app.latest_revision_fqdn}"
+  value       = "https://${azurerm_container_app.mcp_app.ingress[0].fqdn}"
   description = "The public URL for the MCP server"
 }
 
-# Legacy single API key output (uses first user's key for backward compatibility)
-output "api_key" {
-  value       = random_password.api_key[var.api_key_users[0]].result
-  sensitive   = true
-  description = "Default API key for authenticating with the MCP server (first user)"
-}
-
-# All API keys by user
-output "api_keys" {
-  value = {
-    for user in var.api_key_users : user => random_password.api_key[user].result
-  }
-  sensitive   = true
-  description = "API keys per user for authenticating with the MCP server"
+output "mcp_endpoint" {
+  value       = "https://${azurerm_container_app.mcp_app.ingress[0].fqdn}/mcp"
+  description = "The MCP endpoint URL for Streamable HTTP transport"
 }
 
 output "key_vault_name" {
@@ -46,42 +35,32 @@ output "container_app_name" {
   description = "Name of the Azure Container App"
 }
 
-# Claude Code MCP Configuration - Hosted on Azure (per user)
-output "mcp_config_claude_code_hosted" {
-  value = {
-    for user in var.api_key_users : user => jsonencode({
-      mcpServers = {
-        terraform = {
-          type = "sse"
-          url  = "https://${azurerm_container_app.mcp_app.latest_revision_fqdn}/mcp/v1/sse"
-          headers = {
-            Authorization = "Bearer ${random_password.api_key[user].result}"
-          }
-        }
-      }
-    })
-  }
+# API Key for authentication
+output "api_key" {
+  value       = random_password.api_key.result
   sensitive   = true
-  description = "Claude Code MCP configuration per user for hosted Azure deployment. Add to .vscode/mcp.json file."
+  description = "API key for authenticating with the MCP server"
 }
 
-# Claude Code MCP Configuration - Local Docker
-output "mcp_config_claude_code_local" {
+# Claude Code MCP Configuration - ready to use
+output "mcp_config_claude_code" {
   value = jsonencode({
     mcpServers = {
       terraform = {
-        type    = "docker"
-        image   = "${azurerm_container_registry.mcp_acr.login_server}/terraform-mcp-server:latest"
-        command = ["python3", "/usr/local/bin/mcp-sse-server.py"]
-        env = {
-          PORT        = "3000"
-          API_KEY     = random_password.api_key[var.api_key_users[0]].result
-          TFE_ADDRESS = var.tfe_address
-          TFE_TOKEN   = var.tfe_token
+        type = "sse"
+        url  = "https://${azurerm_container_app.mcp_app.ingress[0].fqdn}/mcp"
+        headers = {
+          Authorization = "Bearer <API_KEY>"
         }
       }
     }
   })
-  sensitive   = true
-  description = "Claude Code MCP configuration for local Docker deployment. Add this to your .vscode/mcp.json file."
+  description = <<-EOT
+    Claude Code MCP configuration for hosted Azure deployment.
+
+    To get your API key:
+      terraform output -raw api_key
+
+    Replace <API_KEY> with the actual value in your settings.json or mcp.json file.
+  EOT
 }

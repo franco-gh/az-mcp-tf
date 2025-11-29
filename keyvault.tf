@@ -25,20 +25,18 @@ resource "azurerm_role_assignment" "kv_admin" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
-# Store API keys in Key Vault (one per user)
-resource "azurerm_key_vault_secret" "api_keys" {
-  for_each     = toset(var.api_key_users)
-  name         = "mcp-api-key-${each.key}"
-  value        = random_password.api_key[each.key].result
-  key_vault_id = azurerm_key_vault.mcp_vault.id
-
-  # Ensure role assignment is complete before creating secret
-  depends_on = [azurerm_role_assignment.kv_admin]
-}
-
 # Grant managed identity access to Key Vault secrets
 resource "azurerm_role_assignment" "identity_kv_reader" {
   scope                = azurerm_key_vault.mcp_vault.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.mcp_identity.principal_id
+}
+
+# Store API key in Key Vault
+resource "azurerm_key_vault_secret" "api_key" {
+  name         = "api-key"
+  value        = random_password.api_key.result
+  key_vault_id = azurerm_key_vault.mcp_vault.id
+
+  depends_on = [azurerm_role_assignment.kv_admin]
 }

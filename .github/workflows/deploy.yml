@@ -6,16 +6,18 @@ on:
       - main
     paths:
       - '*.tf'
-      - 'mcp-sse-server.py'
       - 'Dockerfile'
+      - 'nginx.conf'
+      - 'supervisord.conf'
       - '.github/workflows/deploy.yml'
   pull_request:
     branches:
       - main
     paths:
       - '*.tf'
-      - 'mcp-sse-server.py'
       - 'Dockerfile'
+      - 'nginx.conf'
+      - 'supervisord.conf'
 
 env:
   TF_CLOUD_ORGANIZATION: ${{ vars.TF_CLOUD_ORGANIZATION }}

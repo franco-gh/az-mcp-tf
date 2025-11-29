@@ -1,26 +1,26 @@
 FROM hashicorp/terraform-mcp-server:latest
 
-# Install Python and dependencies for SSE wrapper
-RUN apk add --no-cache python3 py3-pip && \
-    pip3 install --break-system-packages aiohttp aiohttp-sse
+# Install nginx, supervisord, and envsubst (gettext)
+USER root
+RUN apk add --no-cache nginx supervisor gettext
 
-# Create non-root user
-RUN adduser -D -u 1000 mcp && \
-    chown -R mcp:mcp /usr/local/bin
+# Copy configuration files
+COPY nginx.conf /etc/nginx/nginx.conf.template
+COPY supervisord.conf /etc/supervisord.conf
 
-# Copy wrapper script
-COPY --chown=mcp:mcp mcp-sse-server.py /usr/local/bin/
-RUN chmod +x /usr/local/bin/mcp-sse-server.py
+# Create nginx directories and set permissions
+RUN mkdir -p /var/lib/nginx/tmp /var/log/nginx /run/nginx && \
+    chown -R nginx:nginx /var/lib/nginx /var/log/nginx /run/nginx
 
-# Switch to non-root user
-USER mcp
+# Create startup script that substitutes API_KEY into nginx config
+RUN printf '#!/bin/sh\nenvsubst "\${API_KEY}" < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf\nexec /usr/bin/supervisord -c /etc/supervisord.conf\n' > /start.sh && \
+    chmod +x /start.sh
 
-# Expose port
-EXPOSE 3000
+# Expose port 8080 (nginx) - MCP server runs internally on 9000
+EXPOSE 8080
 
-# Health check
+# Health check via nginx
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:3000/health')" || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
-# Run the SSE server
-CMD ["python3", "/usr/local/bin/mcp-sse-server.py"]
+CMD ["/start.sh"]
