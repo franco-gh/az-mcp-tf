@@ -2,7 +2,7 @@
 
 This project provides a secure and automated way to deploy the `terraform-mcp-server` to Azure Container Apps. It uses a Python-based Server-Sent Events (SSE) wrapper to ensure compatibility with clients like the GitHub Copilot Chat extension in VS Code, which require SSE for communication.
 
-The deployment is orchestrated using a PowerShell script that automates the entire process, from setting up the Azure infrastructure with Terraform to building and deploying the containerized application.
+Deployment is automated via GitHub Actions with Terraform Cloud integration, or can be done manually using Terraform and Azure CLI.
 
 ## Architecture
 
@@ -31,18 +31,24 @@ The `terraform-mcp-server` is a component that provides an interface for interac
 
 The key features of this project are:
 
-- **Automated Deployment:** The entire deployment process is automated using a single PowerShell script.
-- **Secure by Design:** It leverages Azure Key Vault for storing sensitive information like API keys and uses Managed Identities for secure access between Azure resources.
-- **Scalable:** The application is deployed to Azure Container Apps, a serverless container hosting service that can automatically scale based on demand.
-- **Easy to Use:** Once deployed, it can be easily configured in VS Code for use with GitHub Copilot Chat.
+- **Automated Deployment:** CI/CD via GitHub Actions with Terraform Cloud for infrastructure management.
+- **Secure by Design:** Azure Key Vault for API keys, Managed Identities for secure access, RBAC authorization.
+- **Scalable:** Azure Container Apps with automatic scaling (1-3 replicas).
+- **Easy to Use:** Once deployed, configure VS Code with the generated MCP configuration.
 
 ## Files in this Project
 
-- `terraform-mcp-keyvault.tf` - Azure infrastructure configuration
+- **Terraform Infrastructure:**
+  - `main.tf` - Resource Group, API key generation, Managed Identity
+  - `keyvault.tf` - Key Vault with RBAC authorization
+  - `container-registry.tf` - Azure Container Registry
+  - `container-app.tf` - Container App and Log Analytics
+  - `providers.tf` - Provider versions and Terraform Cloud config
+  - `variables.tf` - Input variables
+  - `outputs.tf` - URLs, credentials, MCP configuration
 - `mcp-sse-server.py` - Python SSE wrapper for the MCP server
 - `Dockerfile` - Container build configuration
-- `deploy.ps1` - PowerShell deployment script
-- `regenerate-token.ps1` - Script to regenerate API token for existing deployment
+- `.github/workflows/deploy.yml` - CI/CD pipeline
 
 ## Prerequisites
 
@@ -52,24 +58,38 @@ The key features of this project are:
 
 ## Deployment
 
-The entire deployment process is automated with the `deploy.ps1` PowerShell script.
+### Automated (GitHub Actions + Terraform Cloud)
 
-1. **Open a PowerShell or Command Prompt:** Ensure you are in the root directory of the project.
-2. **Run the deployment script:**
-   ```powershell
-   ./deploy.ps1
-   ```
+Push to `main` branch triggers the CI/CD pipeline which:
+1. Runs `terraform apply` via Terraform Cloud
+2. Builds Docker image in Azure Container Registry
+3. Updates the Container App with the new image
 
-### What the Script Does
+**Required Setup:**
+- GitHub Secrets: `TF_API_TOKEN`, `AZURE_CREDENTIALS`
+- GitHub Variables: `TF_CLOUD_ORGANIZATION`, `TF_WORKSPACE`
+- Terraform Cloud workspace with Azure credentials (`ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_SUBSCRIPTION_ID`, `ARM_TENANT_ID`)
 
-The `deploy.ps1` script performs the following actions:
+### Manual Deployment
 
-1.  **Prerequisite Checks:** Verifies that both Terraform and the Azure CLI are installed and available in your PATH.
-2.  **Clean Up Key Vaults:** Checks for and purges any soft-deleted Key Vaults with the same name to prevent naming conflicts during deployment.
-3.  **Deploy Infrastructure:** Runs `terraform init` and `terraform apply` to create all the necessary Azure resources, including the Key Vault, Container Registry, and Container App Environment.
-4.  **Build and Push Docker Image:** Uses the Azure Container Registry (`az acr build`) to build the Docker image from the `Dockerfile` and push it to your private registry.
-5.  **Update Container App:** Updates the Azure Container App to use the newly built container image from your Azure Container Registry.
-6.  **Create VS Code Configuration:** Generates a `.vscode/mcp.json` file with the connection details for your new `terraform-mcp-server` instance, including the server URL and the API key.
+```bash
+# 1. Deploy infrastructure
+terraform init
+terraform apply -auto-approve
+
+# 2. Build and push Docker image
+ACR_NAME=$(terraform output -raw acr_name)
+az acr build --registry $ACR_NAME --image terraform-mcp-server:latest --file Dockerfile .
+
+# 3. Update Container App
+CONTAINER_APP=$(terraform output -raw container_app_name)
+RG=$(terraform output -raw resource_group_name)
+ACR_SERVER=$(terraform output -raw acr_login_server)
+az containerapp update --name $CONTAINER_APP --resource-group $RG --image "$ACR_SERVER/terraform-mcp-server:latest"
+
+# 4. Get MCP configuration for VS Code
+terraform output -json mcp_config_claude_code_hosted
+```
 
 ## Infrastructure Components
 
@@ -97,69 +117,40 @@ This solution is designed with security in mind, incorporating several best prac
 
 ## Using with VS Code
 
-1. Open VS Code in this directory
-2. The deployment creates `.vscode/mcp.json` with your configuration
+1. Get the MCP configuration: `terraform output -json mcp_config_claude_code_hosted`
+2. Add the configuration to `.vscode/mcp.json`
 3. Press `Ctrl+Alt+I` to open GitHub Copilot Chat
 4. Select "Agent" mode
 5. Start using Terraform tools!
-
-## Regenerating API Tokens
-
-You can generate a new API token for your existing deployment without redeploying the entire infrastructure. This is useful for:
-
-- **Token Rotation:** Regularly rotate tokens for enhanced security
-- **Access Management:** Grant access to new users without sharing existing tokens
-- **Security Response:** Revoke compromised tokens immediately
-
-### How to Regenerate
-
-Run the regeneration script from the project directory:
-
-```powershell
-./regenerate-token.ps1
-```
-
-The script will:
-1. Generate a new random API key
-2. Update the Azure Key Vault secret
-3. Update the Container App secret
-4. Restart the Container App to apply changes
-5. Update your local `.vscode/mcp.json` configuration
-
-**Important:** All existing tokens will be invalidated. Make sure to distribute the new token to all users who need access.
-
-### Requirements
-
-- Azure CLI installed and authenticated
-- Appropriate permissions on the Azure resources:
-  - "Key Vault Secrets Officer" or "Key Vault Administrator" role for the Key Vault
-  - Contributor access to the Container App
 
 ## Troubleshooting
 
 ### 401 Unauthorized Error
 
-If you receive a "401 Unauthorized" error when trying to connect from VS Code, it means that the API key is incorrect.
+If you receive a "401 Unauthorized" error when trying to connect from VS Code:
 
--   **Verify the API Key:** Double-check that the API key in your `.vscode/mcp.json` file matches the one output by the `deploy.ps1` script.
--   **Check for Extra Characters:** Ensure that you haven't accidentally copied any extra characters or whitespace.
--   **Restart VS Code:** Sometimes, a simple restart of VS Code can resolve the issue.
+- **Verify the API Key:** Check that the API key in `.vscode/mcp.json` matches `terraform output -raw api_key`
+- **Check for Extra Characters:** Ensure no extra whitespace was copied
+- **Restart VS Code:** Sometimes a simple restart resolves the issue
 
 ### Deployment Failures
 
-If the `deploy.ps1` script fails, here are a few things to check:
-
--   **Azure Login:** Make sure you are logged in to the correct Azure account by running `az login`.
--   **Permissions:** Ensure that your account has the necessary permissions to create resources in the target subscription.
--   **Terraform State:** If a previous deployment failed, you might have a corrupt or locked Terraform state file. You can try running `terraform init -reconfigure` to reinitialize the backend.
+- **Azure Login:** Ensure you're logged in with `az login`
+- **Permissions:** Your account needs Contributor access and ability to create RBAC role assignments
+- **Terraform State:** Run `terraform init -reconfigure` if you have state issues
 
 ### Key Vault Naming Conflicts
 
-The `deploy.ps1` script attempts to purge any soft-deleted Key Vaults with the same name. However, if you still encounter a naming conflict, you can manually purge the Key Vault from the Azure Portal.
+Azure Key Vaults have soft-delete enabled. If you encounter naming conflicts, manually purge the deleted vault:
+
+```bash
+az keyvault list-deleted
+az keyvault purge --name <vault-name>
+```
 
 ## Cleanup
 
 Remove all Azure resources:
-```powershell
+```bash
 terraform destroy -auto-approve
 ```
